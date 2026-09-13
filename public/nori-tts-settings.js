@@ -29,6 +29,11 @@
       baseUrl: "https://generativelanguage.googleapis.com/v1beta",
       model: "gemini-3.1-flash-tts-preview",
     },
+    mimo: {
+      label: "Xiaomi MiMo TTS",
+      baseUrl: "https://api.xiaomimimo.com/v1",
+      model: "mimo-v2.5-tts",
+    },
   });
 
   const DEFAULTS = Object.freeze({

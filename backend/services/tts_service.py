@@ -114,6 +114,8 @@ class TTSService:
                 return await self._minimax(clean_text, cfg)
             if provider == "gemini":
                 return await self._gemini(clean_text, cfg)
+            if provider == "mimo":
+                return await self._mimo(clean_text, cfg)
             return await self._openai(clean_text, cfg)
         except TTSServiceError:
             raise
@@ -164,6 +166,54 @@ class TTSService:
         )
         data = _bounded_audio(response.content, provider)
         return EncodedSpeech(data, _response_mime(response, "audio/mpeg"), provider)
+
+    async def _mimo(self, text: str, cfg: Dict[str, Any]) -> EncodedSpeech:
+        """Xiaomi MiMo-V2.5-TTS via the chat-completions audio protocol.
+
+        The provider carries the text to synthesize in an ``assistant`` message,
+        requests audio through the top-level ``audio`` block, and returns the
+        audio as base64 under ``choices[0].message.audio.data``. Style/control
+        hints may optionally go in a leading ``user`` message.
+        """
+        provider = "mimo"
+        base = str(cfg.get("baseUrl") or "https://api.xiaomimimo.com/v1")
+        url = provider_endpoint(base, "/chat/completions")
+        messages = [
+            {
+                "role": "assistant",
+                "content": text,
+            }
+        ]
+        voice = str(cfg.get("voice") or "mimo_default").strip()
+        audio_block = {"format": "wav", "voice": voice}
+        if not voice:
+            audio_block.pop("voice", None)
+        response = await self._post_json(
+            provider=provider,
+            url=url,
+            api_key=str(cfg.get("apiKey") or ""),
+            key_header="api-key",
+            payload={
+                "model": str(cfg.get("model") or "mimo-v2.5-tts"),
+                "messages": messages,
+                "audio": audio_block,
+                "stream": False,
+            },
+        )
+        body = response.json()
+        try:
+            message = body["choices"][0]["message"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise TTSServiceError(provider, "MiMo TTS 响应缺少 choices[0].message") from exc
+        audio = message.get("audio") if isinstance(message, dict) else None
+        data_b64 = audio.get("data") if isinstance(audio, dict) else None
+        if not isinstance(data_b64, str) or not data_b64:
+            raise TTSServiceError(provider, "MiMo TTS 响应缺少 audio.data")
+        try:
+            data = base64.b64decode(data_b64, validate=True)
+        except Exception as exc:
+            raise TTSServiceError(provider, "MiMo TTS 返回了无效的 base64 音频") from exc
+        return EncodedSpeech(_bounded_audio(data, provider), "audio/wav", provider)
 
     async def _custom(self, text: str, cfg: Dict[str, Any]) -> EncodedSpeech:
         provider = "custom"

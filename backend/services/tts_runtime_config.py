@@ -18,6 +18,7 @@ _ALLOWED_PROVIDERS = {
     "gpt-sovits",
     "minimax",
     "gemini",
+    "mimo",
 }
 _RUNTIME_TTS_CONFIG: ContextVar[Dict[str, Any] | None] = ContextVar(
     "nori_runtime_tts_config", default=None

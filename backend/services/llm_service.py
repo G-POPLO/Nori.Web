@@ -210,6 +210,55 @@ class LLMService:
                 if isinstance(block, dict) and block.get("type") == "text"
             ).strip()
 
+    @classmethod
+    async def generate_structured(
+        cls,
+        system_prompt: str,
+        user_text: str,
+        *,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+    ) -> str:
+        """Request a raw completion from the configured provider.
+
+        Unlike ``generate_reply`` this accepts a caller-supplied system prompt
+        (no persona/emotion protocol is imposed) and returns the provider's text
+        unchanged, so callers may parse structured payloads such as JSON. Shared
+        runtime resolution mirrors ``generate_reply``; on any failure it
+        returns an empty string so the caller can fall back to deterministic
+        logic. Returns provider + text via tuple only on success.
+        """
+        runtime = get_runtime_ai_config()
+        browser_override = runtime.get("enabled") is True
+        if not browser_override and not config.OPENAI_API_KEY:
+            return ""
+        provider = str(runtime.get("provider") or "openai-compatible")
+        temperature = float(runtime.get("temperature", 0.75)) if temperature is None else float(temperature)
+        max_tokens = int(runtime.get("maxTokens", 350)) if max_tokens is None else int(max_tokens)
+        api_key = str(runtime.get("apiKey") or "")
+        if provider == "anthropic":
+            base_url = str(runtime.get("baseUrl") or "https://api.anthropic.com/v1")
+            model = str(runtime.get("model") or config.ANTHROPIC_MODEL)
+            fetch = cls._anthropic_reply
+        else:
+            base_url = str(runtime.get("baseUrl") or "https://api.openai.com/v1")
+            model = str(runtime.get("model") or config.OPENAI_MODEL)
+            fetch = cls._openai_compatible_reply
+        try:
+            return await fetch(
+                user_text=user_text,
+                history=[],
+                base_url=base_url,
+                model=model,
+                api_key=api_key,
+                system_prompt=system_prompt,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+        except Exception as exc:
+            print(f"[LLMService] structured request failed: {type(exc).__name__}: {str(exc)[:240]}")
+            return ""
+
     @staticmethod
     def public_provider_error(exc: Exception) -> str:
         """Return a useful browser-facing diagnostic without request secrets."""

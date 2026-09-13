@@ -10,6 +10,8 @@ from pathlib import Path
 from copy import deepcopy
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from ..services.llm_service import LLM_SERVICE
+
 from .base import BaseCartridge, CommandRejected, ReducerResult
 
 TEAM_A = "A"
@@ -457,3 +459,105 @@ class CodenamesCartridge(BaseCartridge):
             if candidates:
                 return {"type": "submitGuess", "cell": candidates[0]}
         return None
+
+    async def generate_agent_turn(self) -> Optional[Dict[str, Any]]:
+        """Drive Nori's Codenames turn through the configured LLM.
+
+        Serializes the current board, revealed cells and Nori's own key into a
+        prompt and asks the model for a single JSON action. Returns ``None`` on
+        any failure so World falls back to the deterministic rules. The model is
+        given only Nori's side of the key (spymaster knowledge) — the opponent's
+        key is never exposed, preserving the hidden-pattern game.
+        """
+        state = self.state
+        game = state.get("gameState")
+        if not isinstance(game, dict) or game.get("phase") == GAME_OVER:
+            return None
+        agent_side = state["agentSide"]
+        board = game["board"]
+        cells = game["cells"]
+
+        board_lines = []
+        for i, cell in enumerate(cells):
+            role = game["key"][agent_side][i]
+            marker = {AGENT: "MY_TEAM", ASSASSIN: "ASSASSIN", BYSTANDER: "BYSTANDER"}.get(role, "?")
+            state_txt = "revealed"
+            if cell["solvedBy"] is None and cell["assassinatedBy"] is None:
+                state_txt = "hidden"
+            board_lines.append(f"{i}: {board[i]['text']} [{marker}] [{state_txt}]")
+        history = game.get("history") or []
+        clue_history = " / ".join(
+            f"{h.get('clueGiver')}:{h.get('clue', {}).get('word')}:{h.get('clue', {}).get('count')}"
+            for h in history[-6:]
+        ) or "none"
+        current_giver = game["whoseTurnToGive"]
+
+        system_prompt = (
+            "You are Nori playing Codenames (Spymaster & Guesser). Respond with "
+            "only one JSON object, no commentary, no markdown. The board has 25 "
+            "cells; MY_TEAM marks your agents. "
+            "When it is your turn to give a clue, output {\"action\":\"clue\"|"
+            "\"guess\",\"word\":\"<single non-board word>\","
+            "\"count\":<1..9>,\"cell\":null}. "
+            "When it is your turn to guess, output {\"action\":\"guess\","
+            "\"cell\":<0-24>,\"word\":null,\"count\":null} targeting an hidden "
+            "MY_TEAM cell. Guess only ONE cell. count is only for clue actions."
+        )
+        whose = "YOU (give a clue)" if current_giver == agent_side else "OPPONENT (guess)"
+        user_prompt = (
+            f"phase={game['phase']}\n"
+            f"whoseTurnToGive={current_giver} (your side is {agent_side}, so turn is: {whose})\n"
+            f"tokensRemaining={game['tokensRemaining']}\n"
+            f"recent_clues={clue_history}\n"
+            "board:\n" + "\n".join(board_lines) + "\n"
+            "Return one JSON object now."
+        )
+
+        raw = await LLM_SERVICE.generate_structured(system_prompt, user_prompt, temperature=0.4, max_tokens=160)
+        if not raw:
+            return None
+        try:
+            data = json.loads(raw)
+        except Exception:
+            match = re.search(r"\{.*\}", raw, re.DOTALL)
+            if not match:
+                return None
+            try:
+                data = json.loads(match.group(0))
+            except Exception:
+                return None
+        if not isinstance(data, dict):
+            return None
+
+        action = str(data.get("action") or "")
+        if game["phase"] != NORMAL:
+            if action != "guess":
+                return None
+            cell = data.get("cell")
+            if not isinstance(cell, int) or not (0 <= cell < 25):
+                return None
+            if cells[cell]["solvedBy"] is not None or cells[cell]["assassinatedBy"] is not None:
+                return None
+            return {"type": "submitGuess", "cell": cell}
+
+        # NORMAL phase: decide clue vs guess based on whose turn.
+        if current_giver == agent_side and action != "guess":
+            word = str(data.get("word") or "").strip().upper()
+            count = data.get("count")
+            if not word or len(word) > 24 or re.search(r"\s|\d", word):
+                return None
+            if word in {entry["text"].upper() for entry in board}:
+                return None
+            if count != "infinity" and (isinstance(count, bool) or not isinstance(count, int) or count < 0):
+                count = 1
+            return {"type": "submitClue", "clue": {"word": word, "count": count if isinstance(count, int) else 1}}
+        else:
+            turn = game["history"][-1] if game["history"] else None
+            if not turn or turn["endedBy"] is not None:
+                return None
+            cell = data.get("cell")
+            if not isinstance(cell, int) or not (0 <= cell < 25):
+                return None
+            if cells[cell]["solvedBy"] is not None or cells[cell]["assassinatedBy"] is not None:
+                return None
+            return {"type": "submitGuess", "cell": cell}

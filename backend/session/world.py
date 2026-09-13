@@ -277,12 +277,31 @@ class WorldSession:
             cartridge = self.cartridges.get(cartridge_id)
             if cartridge is None:
                 return
-            command = self._next_agent_command(cartridge_id, cartridge)
+            if cartridge_id == "codenames":
+                command = await self._next_llm_agent_command(cartridge_id, cartridge)
+            else:
+                command = self._next_agent_command(cartridge_id, cartridge)
             if not command:
                 return
             commit = await self._dispatch_agent_command(cartridge_id, cartridge, command)
             if commit is None:
                 return
+
+    async def _next_llm_agent_command(
+        self,
+        cartridge_id: str,
+        cartridge: BaseCartridge,
+    ) -> Optional[Dict[str, Json]]:
+        """Try the cartridge's async LLM decision, falling back to rules."""
+        generator = getattr(cartridge, "generate_agent_turn", None)
+        try:
+            command = await generator() if callable(generator) else None
+        except Exception as exc:
+            print(f"[world:{self.world_id}] {cartridge_id} LLM agent decision failed: {exc}")
+            command = None
+        if command:
+            return command
+        return self._next_agent_command(cartridge_id, cartridge)
 
     async def _start_next_pictionary_round(self) -> None:
         await asyncio.sleep(1.2)
