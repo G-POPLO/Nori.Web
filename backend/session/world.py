@@ -48,6 +48,17 @@ class WorldSession:
         self._media_sequence = 0
         self._tasks: Set[asyncio.Task[Any]] = set()
         self._agent_tasks: Dict[str, asyncio.Task[Any]] = {}
+        self._last_ai_config: Dict[str, Any] = {}
+
+    def set_ai_config(self, config: Any) -> None:
+        """Remember the browser AI settings for the current owner socket.
+
+        The browser-provided AI settings are stored by the worker in a
+        ContextVar that is scoped to the WebSocket message task. Background
+        agent turns (``_spawn``) run in fresh tasks that do not inherit that
+        context, so we keep a shallow copy here for them to read.
+        """
+        self._last_ai_config = dict(config) if isinstance(config, dict) else {}
 
     def issue_media_grant(self) -> str:
         grant = secrets.token_urlsafe(32)
@@ -272,6 +283,13 @@ class WorldSession:
 
     async def _run_agent_turns(self, cartridge_id: str) -> None:
         """Drive the transparent local opponent until the player must act."""
+        from backend.services.ai_runtime_config import (
+            install_runtime_ai_config,
+        )
+        # Background tasks do not inherit the WebSocket task's ContextVar, so
+        # restore the browser AI settings we cached from the owning socket.
+        if self._last_ai_config:
+            install_runtime_ai_config(self._last_ai_config)
         for _ in range(8):
             await asyncio.sleep(0.35)
             cartridge = self.cartridges.get(cartridge_id)
@@ -313,6 +331,8 @@ class WorldSession:
             await self._dispatch_internal("pictionary", "agent", {"type": "startNextRound", "atMs": int(time.time() * 1000)})
 
     def _schedule_follow_up(self, cartridge_id: str, actor: str, cmd: Dict[str, Json]) -> None:
+        from backend.services.ai_runtime_config import get_runtime_ai_config
+
         command_type = cmd.get("type")
         if cartridge_id == "chat":
             if actor == "player" and command_type == "playerMessage":
@@ -321,6 +341,14 @@ class WorldSession:
                 self._spawn(self._settle_chat_after_audio(cmd["operationId"]))
             return
         if cartridge_id in {"cakeduel", "codenames", "chess"}:
+            # Capture the browser AI settings from this (WebSocket) task so the
+            # spawned agent-turn task can restore them from its own context.
+            # Page settings are captured regardless of their enabled toggle:
+            # Codenames ignores that switch and always prefers the configured
+            # endpoint, while chat still checks enabled on its own path.
+            cfg = get_runtime_ai_config()
+            if cfg:
+                self.set_ai_config(cfg)
             self._schedule_agent_turns(cartridge_id)
         elif cartridge_id == "pictionary" and command_type in {"submitGuess", "skipRound"}:
             self._spawn(self._start_next_pictionary_round())

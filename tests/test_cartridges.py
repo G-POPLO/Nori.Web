@@ -87,6 +87,50 @@ def test_codenames() -> None:
     assert cartridge_en.state["gameState"]["history"][-1]["clue"]["word"] == "NORI"
 
 
+def test_codenames_agent_fallback_non_cheating() -> None:
+    """The deterministic fallback must never consult ``game["key"]``."""
+    cartridge = CodenamesCartridge()
+    cartridge.dispatch("player", {"type": "startGame", "settings": {"tokens": 9, "seed": 10, "wordLocale": "en"}})
+    cartridge.dispatch("player", {"type": "submitClue", "clue": {"word": "NORI", "count": 5}})
+    game = cartridge.state["gameState"]
+    # Corrupt the key after the clue: the player's clue-giver key has NO agents
+    # at all, so a key-reading agent could never pick a "safe" cell and would
+    # end the turn instead of guessing.
+    for index in range(25):
+        game["key"]["A"][index] = "BYSTANDER"
+
+    first = cartridge.agent_next_command()
+    assert first and first["type"] == "submitGuess"
+    # Simulate one completed guess without ending the turn (a real guess on an
+    # all-BYSTANDER key would end it), then ask again: the old cheating logic
+    # returned endTurn here (no agent cells known); the non-cheating fallback
+    # keeps guessing until the clue target is reached.
+    game["history"][-1]["guesses"] = [{"cell": first["cell"], "result": "AGENT", "at": 0}]
+    game["cells"][first["cell"]]["solvedBy"] = "B"
+    second = cartridge.agent_next_command()
+    assert second and second["type"] == "submitGuess"
+    cell = game["cells"][second["cell"]]
+    assert cell["solvedBy"] is None and cell["assassinatedBy"] is None
+
+    # Spymaster fallback gives a default clue from public info only.
+    fresh = CodenamesCartridge()
+    fresh.dispatch("player", {"type": "startGame", "settings": {"tokens": 9, "seed": 10, "wordLocale": "en"}})
+    fresh.state["gameState"]["whoseTurnToGive"] = "B"
+    clue_cmd = fresh.agent_next_command()
+    assert clue_cmd and clue_cmd["type"] == "submitClue"
+    assert clue_cmd["clue"] == {"word": "NORI", "count": 1}
+    fresh.dispatch("agent", clue_cmd)
+
+    # One clue per turn: an active (un-ended) turn blocks any further clue,
+    # whether from the player or the agent repeating itself.
+    try:
+        fresh.dispatch("agent", clue_cmd)
+        raise AssertionError("duplicate clue while turn active should be rejected")
+    except Exception:
+        pass
+    assert len(fresh.state["gameState"]["history"]) == 1
+
+
 def test_cakeduel() -> None:
     cartridge = CakeDuelCartridge()
     cartridge.dispatch("player", {"type": "startGame", "mode": "normal", "difficulty": "soldier"})
@@ -198,6 +242,7 @@ if __name__ == "__main__":
     test_registry()
     test_chat()
     test_codenames()
+    test_codenames_agent_fallback_non_cheating()
     test_cakeduel()
     test_chess()
     test_pictionary()

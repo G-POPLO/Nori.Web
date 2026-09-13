@@ -11,6 +11,7 @@ from backend.services.ai_event_bridge import install_ai_event_bridge
 from backend.services.ai_runtime_config import (
     clear_runtime_ai_config,
     get_runtime_ai_config,
+    install_runtime_ai_config,
     normalize_provider_base_url,
     public_runtime_ai_summary,
     sanitize_runtime_ai_config,
@@ -135,6 +136,28 @@ async def main() -> None:
     assert probe["payload"]["provider"] == "openai-compatible"
     assert probe["payload"]["model"] == "custom-model"
     assert secret not in repr(probe)
+
+    # Structured consumers (Codenames game turns) deliberately ignore the
+    # settings' enabled toggle: any saved endpoint is used even when the chat
+    # override is off.
+    structured_config = sanitize_runtime_ai_config({**raw, "enabled": False})
+    clear_runtime_ai_config()
+    install_runtime_ai_config(structured_config)
+    structured_captured: dict = {}
+
+    async def fake_structured(cls, **kwargs):
+        structured_captured.update(kwargs)
+        return '{"action":"clue","word":"OCEAN","count":2}'
+
+    LLMService._openai_compatible_reply = classmethod(fake_structured)
+    try:
+        raw_action = await LLMService.generate_structured("game prompt", "board")
+    finally:
+        LLMService._openai_compatible_reply = original_openai
+    assert raw_action.startswith("{")
+    assert structured_captured["base_url"] == "https://example.test/v1"
+    assert structured_captured["model"] == "custom-model"
+    assert structured_captured["system_prompt"] == "game prompt"
 
     # Keep the established AI settings hook and its hibernation-aware transport
     # intact while exposing clear connection diagnostics in the Settings UI.

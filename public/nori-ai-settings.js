@@ -128,15 +128,13 @@
     return JSON.stringify(payload);
   }
 
-  function isChatPlayerDispatch(message) {
-    return (
-      message &&
-      message.type === "dispatch" &&
-      message.cartridgeId === "chat" &&
-      message.actor === "player" &&
-      message.cmd &&
-      message.cmd.type === "playerMessage"
-    );
+  function isAiConfigDispatch(message) {
+    // Chat conversations and Codenames game turns both run on browser-supplied
+    // LLM settings. Prepend the config event before their player dispatches so
+    // the server-side runtime context is always populated before the AI acts.
+    if (!message || message.type !== "dispatch" || message.actor !== "player") return false;
+    if (!message.cmd || typeof message.cmd !== "object") return false;
+    return message.cartridgeId === "chat" || message.cartridgeId === "codenames";
   }
 
   function emitStatus(kind, text) {
@@ -196,7 +194,7 @@
     if (typeof data === "string") {
       try {
         const message = JSON.parse(data);
-        if (isChatPlayerDispatch(message)) {
+        if (isAiConfigDispatch(message)) {
           activeSocket = this;
           if (message.worldId) activeWorldId = String(message.worldId);
           const payload = runtimePayload();

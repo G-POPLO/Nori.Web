@@ -204,6 +204,8 @@ class CodenamesCartridge(BaseCartridge):
             raise CommandRejected("Not your turn")
         if cls._remaining_agents(game, side) <= 0:
             raise CommandRejected("This side cannot give clues")
+        if game["history"] and game["history"][-1]["endedBy"] is None:
+            raise CommandRejected("The current turn is still in progress")
         turn = {"clueGiver": side, "clue": clue, "guesses": [], "endedBy": None}
         game["history"].append(turn)
         return game
@@ -410,7 +412,14 @@ class CodenamesCartridge(BaseCartridge):
         raise CommandRejected(f"Unknown codenames command: {command_type}")
 
     def agent_next_command(self) -> Optional[Dict[str, Any]]:
-        """Return one legal local-agent action; scheduling is owned by World."""
+        """Return one legal local-agent action; scheduling is owned by World.
+
+        Deliberate non-cheating fallback: this path never reads ``game["key"]``
+        for the opponent's pattern, so it may only act on public information
+        (board text, revealed status, current clue) plus Nori's own remaining
+        agent count. Used when the LLM is unavailable or returns an unusable
+        action.
+        """
         state = self.state
         game = state.get("gameState")
         if not isinstance(game, dict) or game.get("phase") == GAME_OVER:
@@ -425,39 +434,32 @@ class CodenamesCartridge(BaseCartridge):
         if game["phase"] == NORMAL:
             if not game["history"] or game["history"][-1]["endedBy"] is not None:
                 if game["whoseTurnToGive"] == agent_side:
-                    targets = [
-                        i
-                        for i, role in enumerate(game["key"][agent_side])
-                        if role == AGENT and game["cells"][i]["solvedBy"] is None
-                    ]
-                    if targets:
-                        # The public reducer validates clue form, not semantic relation.
+                    # Public knowledge only: whether this side still owes clues.
+                    if self._remaining_agents(game, agent_side) > 0:
                         return {"type": "submitClue", "clue": {"word": default_clue_word, "count": 1}}
             else:
                 turn = game["history"][-1]
                 if turn["clueGiver"] != agent_side:
+                    clue_count = turn["clue"].get("count") if isinstance(turn.get("clue"), dict) else None
+                    guessed = len(turn["guesses"])
+                    reached_target = isinstance(clue_count, int) and not isinstance(clue_count, bool)
+                    if reached_target and guessed >= clue_count and guessed >= 1:
+                        return {"type": "endTurn"}
                     candidates = [
                         i
                         for i, cell in enumerate(game["cells"])
                         if cell["solvedBy"] is None and cell["assassinatedBy"] is None
                     ]
-                    # Avoid known assassin positions on the clue-giver's key.
-                    safe = [i for i in candidates if game["key"][turn["clueGiver"]][i] == AGENT]
-                    if safe:
-                        return {"type": "submitGuess", "cell": safe[0]}
-                    if turn["guesses"]:
-                        return {"type": "endTurn"}
                     if candidates:
-                        return {"type": "submitGuess", "cell": candidates[0]}
+                        return {"type": "submitGuess", "cell": random.choice(candidates)}
         elif game["phase"] == SUDDEN_DEATH and self._remaining_agents(game, agent_side) > 0:
             candidates = [
                 i
                 for i, cell in enumerate(game["cells"])
                 if cell["solvedBy"] is None and cell["assassinatedBy"] is None
-                and game["key"][self._other(agent_side)][i] == AGENT
             ]
             if candidates:
-                return {"type": "submitGuess", "cell": candidates[0]}
+                return {"type": "submitGuess", "cell": random.choice(candidates)}
         return None
 
     async def generate_agent_turn(self) -> Optional[Dict[str, Any]]:
@@ -477,55 +479,108 @@ class CodenamesCartridge(BaseCartridge):
         board = game["board"]
         cells = game["cells"]
 
-        board_lines = []
-        for i, cell in enumerate(cells):
-            role = game["key"][agent_side][i]
-            marker = {AGENT: "MY_TEAM", ASSASSIN: "ASSASSIN", BYSTANDER: "BYSTANDER"}.get(role, "?")
-            state_txt = "revealed"
-            if cell["solvedBy"] is None and cell["assassinatedBy"] is None:
-                state_txt = "hidden"
-            board_lines.append(f"{i}: {board[i]['text']} [{marker}] [{state_txt}]")
         history = game.get("history") or []
-        clue_history = " / ".join(
-            f"{h.get('clueGiver')}:{h.get('clue', {}).get('word')}:{h.get('clue', {}).get('count')}"
-            for h in history[-6:]
-        ) or "none"
         current_giver = game["whoseTurnToGive"]
+        is_agent_giver = current_giver == agent_side
+        active_turn = history[-1] if history and history[-1]["endedBy"] is None else None
 
-        system_prompt = (
-            "You are Nori playing Codenames (Spymaster & Guesser). Respond with "
-            "only one JSON object, no commentary, no markdown. The board has 25 "
-            "cells; MY_TEAM marks your agents. "
-            "When it is your turn to give a clue, output {\"action\":\"clue\"|"
-            "\"guess\",\"word\":\"<single non-board word>\","
-            "\"count\":<1..9>,\"cell\":null}. "
-            "When it is your turn to guess, output {\"action\":\"guess\","
-            "\"cell\":<0-24>,\"word\":null,\"count\":null} targeting an hidden "
-            "MY_TEAM cell. Guess only ONE cell. count is only for clue actions."
-        )
-        whose = "YOU (give a clue)" if current_giver == agent_side else "OPPONENT (guess)"
-        user_prompt = (
-            f"phase={game['phase']}\n"
-            f"whoseTurnToGive={current_giver} (your side is {agent_side}, so turn is: {whose})\n"
-            f"tokensRemaining={game['tokensRemaining']}\n"
-            f"recent_clues={clue_history}\n"
-            "board:\n" + "\n".join(board_lines) + "\n"
-            "Return one JSON object now."
-        )
+        if is_agent_giver:
+            if active_turn is not None:
+                # The clue for this turn was already submitted; the guesser must
+                # act now. Without this guard the LLM would emit another clue
+                # every time World re-polls the agent.
+                return None
+            # Spymaster view: Nori knows its own pattern and must craft a clue
+            # word (NOT on the board) plus the number of agents it covers.
+            board_lines = []
+            for i, cell in enumerate(cells):
+                role = game["key"][agent_side][i]
+                marker = {AGENT: "MY_TEAM", ASSASSIN: "ASSASSIN", BYSTANDER: "BYSTANDER"}.get(role, "?")
+                state_txt = "revealed" if (cell["solvedBy"] is not None or cell["assassinatedBy"] is not None) else "hidden"
+                board_lines.append(f"{i}: {board[i]['text']} [{marker}] [{state_txt}]")
+            live_agents = [
+                i for i, cell in enumerate(cells)
+                if game["key"][agent_side][i] == AGENT and cell["solvedBy"] is None
+            ]
+            hidden_words = ", ".join(board[i]["text"] for i in live_agents) or "none left"
+            system_prompt = (
+                "You are Nori, the Spymaster in Codenames. You know exactly which "
+                "cells belong to your team (MY_TEAM). Your job: give ONE single-word "
+                "clue that hints at the given MY_TEAM words. The clue word MUST NOT "
+                "appear on the board and should not be a compound or the board word "
+                "itself. Reply with only one JSON object, no commentary, no markdown: "
+                '{"action":"clue","word":"<one-word clue>","count":<1..9>,"cell":null}. '
+                "count = how many of your team's words the clue covers (<= number given)."
+            )
+            user_prompt = (
+                "phase=NORMAL it is YOUR turn to give a clue.\n"
+                "Your team's hidden words to hint at:\n" + hidden_words + "\n"
+                "Full board (your perspective):\n" + "\n".join(board_lines) + "\n"
+                'Return a single JSON object of the form {"action":"clue",...} now.'
+            )
+        else:
+            # Guesser view: Nori must NOT see any key pattern. Reveal only the
+            # board words + whether each is already revealed, plus the Spymaster's
+            # clue for this turn, then pick the most semantically related hidden word.
+            board_lines = []
+            for i, cell in enumerate(cells):
+                state_txt = "revealed" if (cell["solvedBy"] is not None or cell["assassinatedBy"] is not None) else "hidden"
+                board_lines.append(f"{i}: {board[i]['text']} [{state_txt}]")
+            clue_word = ""
+            clue_count = ""
+            turn = history[-1] if history else None
+            guessed_this_turn = 0
+            if turn and isinstance(turn.get("clue"), dict):
+                clue_word = str(turn["clue"].get("word") or "")
+                clue_count = str(turn["clue"].get("count") or "")
+                if isinstance(turn.get("guesses"), list):
+                    guessed_this_turn = len(turn["guesses"])
+            # A clue's count is the Spymaster's target; guessing "infinity" means
+            # keep going until you choose to stop.
+            system_prompt = (
+                "You are Nori, the Guesser in Codenames. You do NOT know where any "
+                "team's agents or the assassin are — you only have the board words "
+                "and the Spymaster's clue. Choose the ONE hidden board word that is "
+                "most strongly related to the clue, then stop when you are done. "
+                "Reply with only one JSON object, no commentary:\n"
+                "To flip a card: {\"action\":\"guess\",\"cell\":<0-24>,"
+                "\"word\":null,\"count\":null} — choose an unrevealed cell, never "
+                "invent a word.\n"
+                "To voluntarily END your turn (only after at least one guess): "
+                "{\"action\":\"end\",\"cell\":null,\"word\":null,\"count\":null}."
+            )
+            user_prompt = (
+                "phase=NORMAL it is YOUR turn to guess.\n"
+                f"The clue is: \"{clue_word}\" (targets ~{clue_count} cards).\n"
+                f"You have already guessed {guessed_this_turn} card(s) this turn.\n"
+                "Guess one more board card you think fits, or end your turn if you "
+                "are done or uncertain.\n"
+                "Board:\n" + "\n".join(board_lines) + "\n"
+                'Return a single JSON object {"action":...} now.'
+            )
 
         raw = await LLM_SERVICE.generate_structured(system_prompt, user_prompt, temperature=0.4, max_tokens=160)
-        if not raw:
-            return None
-        try:
-            data = json.loads(raw)
-        except Exception:
-            match = re.search(r"\{.*\}", raw, re.DOTALL)
-            if not match:
+        data: Any = None
+        for attempt in range(2):
+            if not raw:
                 return None
             try:
-                data = json.loads(match.group(0))
+                data = json.loads(raw)
             except Exception:
-                return None
+                match = re.search(r"\{.*\}", raw, re.DOTALL)
+                if not match:
+                    data = None
+                else:
+                    try:
+                        data = json.loads(match.group(0))
+                    except Exception:
+                        data = None
+            if isinstance(data, dict):
+                break
+            if attempt == 0:
+                # One retry with the same prompt before falling back to rules.
+                print("[nori-codenames] LLM returned unparseable action; retrying once")
+                raw = await LLM_SERVICE.generate_structured(system_prompt, user_prompt, temperature=0.4, max_tokens=160)
         if not isinstance(data, dict):
             return None
 
@@ -554,6 +609,20 @@ class CodenamesCartridge(BaseCartridge):
         else:
             turn = game["history"][-1] if game["history"] else None
             if not turn or turn["endedBy"] is not None:
+                return None
+            guesses = turn.get("guesses") if isinstance(turn, dict) else None
+            guessed_count = len(guesses) if isinstance(guesses, list) else 0
+            clue_count_raw = turn["clue"].get("count") if isinstance(turn.get("clue"), dict) else None
+            # End the turn deterministically once we've flipped the Spymaster's
+            # target number of cards (the clue's count). "infinity" has no cap, so
+            # the LLM explicitly stops instead.
+            reached_target = isinstance(clue_count_raw, int) and not isinstance(clue_count_raw, bool)
+            reached_target = reached_target and guessed_count >= clue_count_raw
+            # Deterministically end the turn once we've reached the target count,
+            # or when the LLM explicitly asks to stop (after >=1 guess).
+            if action == "end" or reached_target:
+                if guessed_count >= 1:
+                    return {"type": "endTurn"}
                 return None
             cell = data.get("cell")
             if not isinstance(cell, int) or not (0 <= cell < 25):

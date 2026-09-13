@@ -229,8 +229,12 @@ class LLMService:
         logic. Returns provider + text via tuple only on success.
         """
         runtime = get_runtime_ai_config()
-        browser_override = runtime.get("enabled") is True
-        if not browser_override and not config.OPENAI_API_KEY:
+        # Page (browser) settings win whenever they carry a usable endpoint,
+        # regardless of the settings' enabled toggle — game cartridges such as
+        # Codenames deliberately ignore that switch. Without page settings the
+        # historical server-default path applies.
+        page_configured = bool(str(runtime.get("baseUrl") or "").strip())
+        if not page_configured and not config.OPENAI_API_KEY:
             return ""
         provider = str(runtime.get("provider") or "openai-compatible")
         temperature = float(runtime.get("temperature", 0.75)) if temperature is None else float(temperature)
