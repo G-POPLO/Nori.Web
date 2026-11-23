@@ -28,6 +28,9 @@
          Arcade artifact stream and injects them once their fact / compute
          unlock is observed. Hooks WebSocket before the app bundle opens one. -->
     <script src="/nori-file-gate.js"></script>
+    <!-- Story scheduler hides reveal-gated mails until their trigger (reading
+         an earlier mail / a fact) fires, then releases them after a delay. -->
+    <script src="/nori-story-scheduler.js"></script>
     <!-- Dedicated URL-scoped wallpaper mode also runs before the historical app
          so the desktop chrome is suppressed before its first rendered frame. -->
     <script src="/nori-wallpaper-mode.js"></script>

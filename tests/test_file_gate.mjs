@@ -38,7 +38,7 @@ const manifest = {
   files: {
     file_secret_log: {
       bodyUrl: "/gated/file_secret_log.json",
-      recoverWhen: "recover.secret_log",
+      recoverWhen: "read:mail.welcome",
       threshold: null,
     },
     file_compute_log: {
@@ -111,13 +111,13 @@ let art = msg.payload.artifacts[0];
 assert(art.data.body_md === undefined, "locked file must have body_md stripped");
 assert(art.data.contentKey === "file_secret_log", "locked file keeps contentKey");
 
-// --- Branch 2: emitting the unlock fact unlocks the file ---
+// --- Branch 2: reading the trigger mail unlocks the file (real-world path) ---
 const GatedWSProto = GatedWS.prototype;
 const sendFn = GatedWSProto.send;
 sendFn.call(socket, JSON.stringify({
   type: "event",
   channel: "manifold.command.request",
-  payload: { command: "client.emitFact", payload: { factId: "recover.secret_log" } },
+  payload: { command: "mail.read", payload: { mailId: "mail.welcome" } },
 }));
 await new Promise((r) => setTimeout(r, 20));
 

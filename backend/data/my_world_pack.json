@@ -1,7 +1,7 @@
 {
  "_meta": {
   "source": "locally composed content (tools/compose_pack.py)",
-  "imported_at": "2026-11-23T18:05:02",
+  "imported_at": "2026-11-23T19:14:33",
   "world_id": "wi_my_own_story"
  },
  "mail_artifacts": [
@@ -9,12 +9,23 @@
    "id": "mail.welcome",
    "type": "mail",
    "data": {
-    "read_fact": "recover.secret_log",
+    "read_fact": "mail.welcome.read",
     "subject": "欢迎来到这里",
     "from": "档案管理员 <archivist@localhost>",
     "body_md": "你好，\n\n这是一封由 `content/mail/` 下的 Markdown 文件生成的示例邮件。\n\n你可以随意修改这段文字，重新运行编译器后，游戏里的邮件内容就会跟着变化。\n\n— 档案管理员\n"
    },
    "surfacedAt": 1787014435646
+  },
+  {
+   "id": "mail.followup",
+   "type": "mail",
+   "data": {
+    "read_fact": "mail.followup.read",
+    "subject": "你收到了吗？",
+    "from": "档案管理员 <archivist@localhost>",
+    "body_md": "如果你读到了这封信，说明上一封欢迎邮件已经被系统记录为\"已读\"。\n\n这封邮件是**延迟触发**的：它在你读完邮件1之后 8 秒才出现，而不是一开始就躺在收件箱里。\n\n实现方式是 `public/nori-story-scheduler.js` 监听 `mail.read` 命令，匹配到触发器 `read:mail.welcome` 后启动计时器，到点把本邮件放行并刷新列表。\n\n你可以把 `reveal_after` 改成别的触发器（比如 `fact:some.fact.id`），把 `reveal_delay_ms` 改成你想要的毫秒数。\n"
+   },
+   "surfacedAt": 1795432473071
   }
  ],
  "file_artifacts": [
@@ -28,9 +39,9 @@
     "modified_at": "2026-08-20T12:00:00",
     "contentKey": "file_secret_log",
     "cipher": "RSA-2048",
-    "recover_when": "recover.secret_log"
+    "recover_when": "read:mail.welcome"
    },
-   "surfacedAt": 1795428302697
+   "surfacedAt": 1795432473072
   },
   {
    "id": "file.readme",
@@ -62,7 +73,7 @@
     "reread": {},
     "service": true
    },
-   "surfacedAt": 1795428302696
+   "surfacedAt": 1795432473071
   }
  ],
  "signal_message_artifacts": [
@@ -77,7 +88,7 @@
     "timestamp": "2026-08-10T09:12:00",
     "body_md": "你终于上线了。我留了一份档案给你。\n"
    },
-   "surfacedAt": 1795428302696
+   "surfacedAt": 1795432473071
   },
   {
    "id": "signal.mira.m02",
@@ -90,7 +101,7 @@
     "timestamp": "2026-08-10T09:14:00",
     "body_md": "收到。先从我这里开始看起吗？\n"
    },
-   "surfacedAt": 1795428302696
+   "surfacedAt": 1795432473071
   },
   {
    "id": "signal.mira.m03",
@@ -103,7 +114,7 @@
     "timestamp": "2026-08-10T09:15:00",
     "body_md": "对。读完之后，去浏览器里找 `https://localhost/home/`。\n"
    },
-   "surfacedAt": 1795428302696
+   "surfacedAt": 1795432473071
   }
  ],
  "browser_pages": [

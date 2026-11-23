@@ -1,0 +1,10 @@
+{
+ "version": 1,
+ "reveals": {
+  "mail.followup": {
+   "kind": "mail",
+   "trigger": "read:mail.welcome",
+   "delayMs": 8000
+  }
+ }
+}

@@ -1,5 +1,5 @@
 <!--
-{"id": "mail.welcome", "subject": "欢迎来到这里", "from": "档案管理员 <archivist@localhost>", "read_fact": "recover.secret_log", "surfacedAt": 1787014435646}
+{"id": "mail.welcome", "subject": "欢迎来到这里", "from": "档案管理员 <archivist@localhost>", "read_fact": "mail.welcome.read", "surfacedAt": 1787014435646}
 -->
 你好，
 

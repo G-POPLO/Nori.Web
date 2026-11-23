@@ -57,6 +57,7 @@ FRONT_MATTER_RE = re.compile(r"^\s*<!--\s*(\{.*?\})\s*-->\s*\n?", re.S)
 # fact / compute threshold unlocks each body and how to fetch it.
 _GATED_BODIES: dict[str, str] = {}
 _GATED_MANIFEST: dict[str, Any] = {}
+_STORY_REVEALS: dict[str, Any] = {}
 
 
 def safe_gate_key(value: str) -> str:
@@ -100,17 +101,30 @@ def build_mail() -> list[dict[str, Any]]:
         meta, body = read_with_meta(path)
         stem = path.stem
         item_id = meta.get("id", f"mail.{stem}")
+        data: dict[str, Any] = {
+            "read_fact": meta.get("read_fact", f"{item_id}.read"),
+            "subject": meta.get("subject", stem),
+            "from": meta.get("from", ""),
+            "body_md": body,
+        }
         out.append({
             "id": item_id,
             "type": "mail",
-            "data": {
-                "read_fact": meta.get("read_fact", f"{item_id}.read"),
-                "subject": meta.get("subject", stem),
-                "from": meta.get("from", ""),
-                "body_md": body,
-            },
+            "data": data,
             "surfacedAt": meta.get("surfacedAt", now_ms()),
         })
+
+        # Story scheduling: a delayed mail is hidden until its trigger fires,
+        # then appears after `reveal_delay_ms`. The browser-side story scheduler
+        # reads story-manifest.json to drive this presentation-layer flow.
+        trigger = meta.get("reveal_after") if isinstance(meta.get("reveal_after"), str) else ""
+        if trigger:
+            _STORY_REVEALS[item_id] = {
+                "kind": "mail",
+                "trigger": trigger,
+                "delayMs": meta.get("reveal_delay_ms", 0)
+                if isinstance(meta.get("reveal_delay_ms", 0), (int, float)) else 0,
+            }
     return out
 
 
@@ -260,9 +274,10 @@ def copy_assets() -> int:
 
 
 def build_pack() -> dict[str, Any]:
-    global _GATED_BODIES, _GATED_MANIFEST
+    global _GATED_BODIES, _GATED_MANIFEST, _STORY_REVEALS
     _GATED_BODIES = {}
     _GATED_MANIFEST = {}
+    _STORY_REVEALS = {}
     meta = load_meta()
     threads, messages = build_signal()
     pack = {
@@ -329,6 +344,15 @@ def main() -> int:
             encoding="utf-8",
         )
         print(f"gated bodies written: {len(_GATED_BODIES)} -> {GATED_DIR}")
+
+    # Story reveal schedule (always written when present, independent of gates).
+    if _STORY_REVEALS:
+        GATED_DIR.mkdir(parents=True, exist_ok=True)
+        (GATED_DIR / "story-manifest.json").write_text(
+            json.dumps({"version": 1, "reveals": _STORY_REVEALS}, ensure_ascii=False, indent=1),
+            encoding="utf-8",
+        )
+        print(f"story reveals written: {len(_STORY_REVEALS)} -> {GATED_DIR}/story-manifest.json")
 
     copied = copy_assets()
     if copied:

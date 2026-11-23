@@ -109,7 +109,16 @@
   function grantByFact(factId) {
     if (typeof factId !== "string" || !manifest) return;
     for (const [key, spec] of Object.entries(manifest)) {
-      if (spec.recoverWhen === factId) unlock(key);
+      if (spec.recoverWhen === factId || spec.recoverWhen === `fact:${factId}`) unlock(key);
+    }
+  }
+
+  // Reading a mail can unlock a file when recoverWhen is "read:<mailId>".
+  function grantByMail(mailId) {
+    if (typeof mailId !== "string" || !manifest) return;
+    const trigger = `read:${mailId}`;
+    for (const [key, spec] of Object.entries(manifest)) {
+      if (spec.recoverWhen === trigger) unlock(key);
     }
   }
 
@@ -137,6 +146,11 @@
     if (channel === "manifold.command.request" || channel === "event") {
       if (payload.command === "client.emitFact") {
         grantByFact(payload.payload && payload.payload.factId);
+      }
+      if (payload.command === "mail.read" || payload.command === "mail.markRead" ||
+          payload.command === "mark_mail_read") {
+        const inner = payload.payload || {};
+        grantByMail(inner.mailId || inner.id);
       }
     }
 
