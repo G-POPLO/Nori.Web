@@ -1,0 +1,145 @@
+{
+ "_meta": {
+  "source": "locally composed content (tools/compose_pack.py)",
+  "imported_at": "2026-11-20T13:29:32",
+  "world_id": "wi_my_own_story"
+ },
+ "mail_artifacts": [
+  {
+   "id": "mail.welcome",
+   "type": "mail",
+   "data": {
+    "read_fact": "mail.welcome.read",
+    "subject": "欢迎来到这里",
+    "from": "档案管理员 <archivist@localhost>",
+    "body_md": "你好，\n\n这是一封由 `content/mail/` 下的 Markdown 文件生成的示例邮件。\n\n你可以随意修改这段文字，重新运行编译器后，游戏里的邮件内容就会跟着变化。\n\n— 档案管理员\n"
+   },
+   "surfacedAt": 1787014435646
+  }
+ ],
+ "file_artifacts": [
+  {
+   "id": "file.readme",
+   "type": "file",
+   "data": {
+    "display_path": "文稿/说明.txt",
+    "mime": "text/plain",
+    "folder": "文稿",
+    "modified_at": "2026-08-12T22:30:00",
+    "body_md": "这是一份虚拟文件。\n\n`content/files/` 下的目录结构会自动映射成游戏终端里看到的路径。\n比如本文件位于 `content/files/notes/说明.md`，所以 `display_path` 是 `文稿/说明.txt`。\n\n正文就是你现在读到的这些文字。\n"
+   },
+   "surfacedAt": 1787015430301
+  }
+ ],
+ "signal_thread_artifacts": [
+  {
+   "id": "signal.mira",
+   "type": "signal_thread",
+   "data": {
+    "thread_id": "mira",
+    "title": "米拉",
+    "participants": [
+     "米拉",
+     "我"
+    ],
+    "avatar_path": "",
+    "unread_from": "2026-08-10T00:00:00",
+    "read_fact": "signal.mira.read",
+    "reread": {},
+    "service": true
+   },
+   "surfacedAt": 1795152572406
+  }
+ ],
+ "signal_message_artifacts": [
+  {
+   "id": "signal.mira.m01",
+   "type": "signal_message",
+   "data": {
+    "thread_id": "mira",
+    "message_id": "m01",
+    "sender": "米拉",
+    "kind": "text",
+    "timestamp": "2026-08-10T09:12:00",
+    "body_md": "你终于上线了。我留了一份档案给你。\n"
+   },
+   "surfacedAt": 1795152572406
+  },
+  {
+   "id": "signal.mira.m02",
+   "type": "signal_message",
+   "data": {
+    "thread_id": "mira",
+    "message_id": "m02",
+    "sender": "我",
+    "kind": "text",
+    "timestamp": "2026-08-10T09:14:00",
+    "body_md": "收到。先从我这里开始看起吗？\n"
+   },
+   "surfacedAt": 1795152572406
+  },
+  {
+   "id": "signal.mira.m03",
+   "type": "signal_message",
+   "data": {
+    "thread_id": "mira",
+    "message_id": "m03",
+    "sender": "米拉",
+    "kind": "text",
+    "timestamp": "2026-08-10T09:15:00",
+    "body_md": "对。读完之后，去浏览器里找 `https://localhost/home/`。\n"
+   },
+   "surfacedAt": 1795152572406
+  }
+ ],
+ "browser_pages": [
+  {
+   "key": "https://localhost/home/",
+   "id": "browser.myhome",
+   "data": {
+    "url": "https://localhost/home/",
+    "supported_locales": [
+     "zh-CN"
+    ],
+    "title": "起点",
+    "body_html": "<!--\n{\"id\": \"browser.myhome\", \"url\": \"https://localhost/home/\", \"title\": \"起点\", \"read_fact\": \"myhome.read\", \"aliases\": [\"https://localhost/home/index.html\"]}\n-->\n<!doctype html>\n<html lang=\"zh-CN\">\n<head>\n<meta charset=\"utf-8\" />\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />\n<title>起点</title>\n<style>\n  body { margin: 0; min-height: 100vh; display: grid; place-items: center;\n         background: #0b1020; color: #dbe4ff; font-family: system-ui, sans-serif; }\n  main { max-width: 640px; padding: 40px; }\n  h1 { font-weight: 500; font-size: 28px; }\n  code { background: #1b2440; padding: 2px 6px; border-radius: 4px; }\n</style>\n</head>\n<body>\n<main>\n  <h1>这是你自己的网页</h1>\n  <p>整个 HTML 文件就是 <code>body_html</code>。你可以写任意 HTML / CSS / 内联脚本。</p>\n  <p>元数据写在最上方的 HTML 注释里，声明这个页面的 URL、标题和访问后要发射的 fact。</p>\n  <p>改完重新编译，游戏内浏览器就能打开它。</p>\n</main>\n</body>\n</html>\n",
+    "allowed_commands": [
+     "client.emitFact"
+    ],
+    "read_fact": "myhome.read"
+   },
+   "aliases": [
+    "https://localhost/home/",
+    "https://localhost/home/index.html"
+   ]
+  }
+ ],
+ "facts": {
+  "session.ready": {
+   "id": "session.ready",
+   "emittedAt": 1787014380337,
+   "actor": "system",
+   "source": "system.emitFact"
+  },
+  "boot.completed": {
+   "id": "boot.completed",
+   "emittedAt": 1787014435646,
+   "actor": "player",
+   "source": "client.emitFact"
+  }
+ },
+ "variables": {
+  "playerName": "访客",
+  "chapter": 1
+ },
+ "world_id": "wi_my_own_story",
+ "mounted_cartridges": [
+  "chat",
+  "manifold.web"
+ ],
+ "chip_status": {
+  "capacity": 5,
+  "heat": 0,
+  "coolEveryMs": 300000
+ }
+}

@@ -19,7 +19,9 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 from urllib.parse import urlsplit
 
-PACK_PATH = Path(__file__).resolve().parents[1] / "data" / "live_world_pack.json"
+PACK_PATH = Path(os.getenv("NORI_PACK_PATH", "")).expanduser() if os.getenv("NORI_PACK_PATH", "").strip() else (
+    Path(__file__).resolve().parents[1] / "data" / "live_world_pack.json"
+)
 _DISABLED = os.getenv("NORI_DISABLE_LIVE_PACK", "").strip().lower() in {
     "1",
     "true",

@@ -15,7 +15,7 @@ The browser can override the server-side model configuration with:
 - Temperature
 - Maximum output tokens
 
-The **Use browser AI configuration** switch is off by default. When it is off, Nori.Web keeps using the server's existing `OPENAI_*` configuration and local fallback behavior.
+The **Use browser AI configuration** switch is off by default. When it is off, Nori.Web keeps using the server's existing `OPENAI_*` configuration and local fallback behavior for chat replies. Game cartridges that call the structured LLM path (currently **Codenames**) deliberately ignore this switch: any saved endpoint is used even when the switch is off, so the AI opponent works without changing chat behavior. If no Base URL is saved, Codenames uses the server configuration, and falls back to deterministic non-cheating rules when no LLM is available.
 
 ## Browser persistence
 
@@ -34,7 +34,7 @@ A persisted browser key can be read by JavaScript executing on the same origin. 
 
 ## Server transport and secret isolation
 
-Before the browser sends a player chat message, `public/nori-ai-settings.js` sends the active configuration over the verified Arcade `event` channel:
+Before the browser sends a player chat message or any Codenames game dispatch, `public/nori-ai-settings.js` sends the active configuration over the verified Arcade `event` channel (fingerprint-deduped per socket):
 
 ```text
 nori.ai.config

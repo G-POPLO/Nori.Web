@@ -1,0 +1,32 @@
+{
+  "thread_id": "mira",
+  "title": "米拉",
+  "participants": ["米拉", "我"],
+  "avatar_path": "",
+  "unread_from": "2026-08-10T00:00:00",
+  "read_fact": "signal.mira.read",
+  "service": true,
+  "messages": [
+    {
+      "message_id": "m01",
+      "sender": "米拉",
+      "kind": "text",
+      "timestamp": "2026-08-10T09:12:00",
+      "body_md": "你终于上线了。我留了一份档案给你。"
+    },
+    {
+      "message_id": "m02",
+      "sender": "我",
+      "kind": "text",
+      "timestamp": "2026-08-10T09:14:00",
+      "body_md": "收到。先从我这里开始看起吗？"
+    },
+    {
+      "message_id": "m03",
+      "sender": "米拉",
+      "kind": "text",
+      "timestamp": "2026-08-10T09:15:00",
+      "body_md": "对。读完之后，去浏览器里找 `https://localhost/home/`。"
+    }
+  ]
+}

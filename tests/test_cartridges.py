@@ -131,6 +131,57 @@ def test_codenames_agent_fallback_non_cheating() -> None:
     assert len(fresh.state["gameState"]["history"]) == 1
 
 
+def test_codenames_llm_modes() -> None:
+    """LLM decision routing: SUDDEN_DEATH guesses only; NORMAL waits for clues."""
+    import asyncio
+
+    from backend.cartridges import codenames as codenames_mod
+
+    def fresh_game():
+        cartridge = CodenamesCartridge()
+        cartridge.dispatch("player", {"type": "startGame", "settings": {"tokens": 9, "seed": 10, "wordLocale": "en"}})
+        return cartridge
+
+    captured: dict = {}
+
+    async def fake_structured(system_prompt, user_text, **kwargs):
+        captured["called"] = captured.get("called", 0) + 1
+        captured["user"] = user_text
+        return fake_structured.response
+
+    fake_structured.response = ""
+    original = codenames_mod.LLM_SERVICE.generate_structured
+    codenames_mod.LLM_SERVICE.generate_structured = fake_structured
+    try:
+        # SUDDEN_DEATH: the model must be asked for a guess with an SD prompt,
+        # never for a clue (the old code sent a phase=NORMAL clue request).
+        sd_cartridge = fresh_game()
+        sd_cartridge.state["gameState"]["phase"] = "SUDDEN_DEATH"
+        captured.clear()
+        fake_structured.response = '{"action":"guess","cell":3}'
+        command = asyncio.run(sd_cartridge.generate_agent_turn())
+        assert command == {"type": "submitGuess", "cell": 3}
+        assert "SUDDEN_DEATH" in captured["user"]
+
+        fake_structured.response = '{"action":"clue","word":"X","count":1}'
+        assert asyncio.run(sd_cartridge.generate_agent_turn()) is None
+
+        # NORMAL while the player still owes a clue: no LLM call at all.
+        waiting = fresh_game()
+        captured.clear()
+        assert asyncio.run(waiting.generate_agent_turn()) is None
+        assert captured.get("called", 0) == 0
+
+        # count=0 edge: zero guesses must not "reach the target" (would be an
+        # illegal zero-guess endTurn); after one guess the target is reached.
+        turn = {"clue": {"word": "X", "count": 0}, "guesses": [], "endedBy": None}
+        assert CodenamesCartridge._clue_target_reached(turn) is False
+        turn["guesses"] = [{"cell": 0, "result": "AGENT", "at": 0}]
+        assert CodenamesCartridge._clue_target_reached(turn) is True
+    finally:
+        codenames_mod.LLM_SERVICE.generate_structured = original
+
+
 def test_cakeduel() -> None:
     cartridge = CakeDuelCartridge()
     cartridge.dispatch("player", {"type": "startGame", "mode": "normal", "difficulty": "soldier"})
@@ -243,6 +294,7 @@ if __name__ == "__main__":
     test_chat()
     test_codenames()
     test_codenames_agent_fallback_non_cheating()
+    test_codenames_llm_modes()
     test_cakeduel()
     test_chess()
     test_pictionary()

@@ -10,6 +10,10 @@ import httpx
 from ..core import config
 from .ai_runtime_config import get_runtime_ai_config
 
+
+class _ThinkingBudgetExceeded(RuntimeError):
+    """The completion budget was consumed entirely by a thinking/reasoning channel."""
+
 EMOTIONS = {
     "happy",
     "excited",
@@ -111,9 +115,14 @@ class LLMService:
     @staticmethod
     def _openai_message_text(data: Any) -> str:
         """Read both classic string content and text-part compatible responses."""
-        message = data["choices"][0]["message"]
-        content = message.get("content") if isinstance(message, dict) else None
-        if isinstance(content, str):
+        choices = data.get("choices") if isinstance(data, dict) else None
+        if not isinstance(choices, list) or not choices:
+            raise ValueError("OpenAI-compatible response did not contain choices")
+        message = choices[0].get("message") if isinstance(choices[0], dict) else None
+        if not isinstance(message, dict):
+            raise ValueError("OpenAI-compatible response did not contain a message")
+        content = message.get("content")
+        if isinstance(content, str) and content.strip():
             return content
         if isinstance(content, list):
             parts: List[str] = []
@@ -127,7 +136,16 @@ class LLMService:
                 nested = item.get("content")
                 if isinstance(nested, str):
                     parts.append(nested)
-            return "".join(parts)
+            joined = "".join(parts)
+            if joined.strip():
+                return joined
+        # Reasoning models (e.g. local thinking models via LM Studio) may leave
+        # `content` empty and expose their chain of thought in a dedicated field.
+        reasoning = message.get("reasoning_content")
+        if isinstance(reasoning, str) and reasoning.strip():
+            return reasoning
+        if isinstance(content, str):
+            return content
         raise ValueError("OpenAI-compatible response did not contain message text")
 
     @classmethod
@@ -142,6 +160,7 @@ class LLMService:
         system_prompt: str,
         temperature: float,
         max_tokens: int,
+        json_schema: Optional[Dict[str, Any]] = None,
     ) -> str:
         messages: List[Dict[str, str]] = [{"role": "system", "content": system_prompt}]
         messages.extend(cls._history(history))
@@ -156,15 +175,75 @@ class LLMService:
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
-        async with httpx.AsyncClient(timeout=30.0, follow_redirects=False) as client:
+        if json_schema is not None:
+            # Structured output also stops thinking models from spending the
+            # whole budget on hidden chain-of-thought before the JSON answer.
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {"name": "response", "strict": True, "schema": json_schema},
+            }
+        # Local reasoning models can take minutes per request when thinking.
+        async with httpx.AsyncClient(timeout=240.0, follow_redirects=False) as client:
             response = await client.post(url, headers=headers, json=payload)
+
+            def _has_choices(resp: httpx.Response) -> bool:
+                try:
+                    body = resp.json()
+                except Exception:
+                    return False
+                return isinstance(body, dict) and isinstance(body.get("choices"), list) and bool(body["choices"])
+
+            # Local runtimes such as LM Studio expose the OpenAI API under /v1;
+            # users often save the bare host, and LM Studio then answers the
+            # wrong path with HTTP 200 + an error body (no "choices"), so retry
+            # with /v1 inserted on either a 404 or a choiceless response.
+            if not base_url.rstrip("/").endswith("/v1") and (
+                response.status_code == 404 or not _has_choices(response)
+            ):
+                url = f"{base_url.rstrip('/')}/v1/chat/completions"
+                response = await client.post(url, headers=headers, json=payload)
+            if json_schema is not None and response.status_code // 100 == 4:
+                # Provider rejects structured output — retry unconstrained; the
+                # caller still parses JSON out of the plain-text reply.
+                detail = ""
+                try:
+                    detail = response.text[:200]
+                except Exception:
+                    pass
+                print(f"[LLMService] response_format rejected ({detail}); retrying without schema")
+                payload.pop("response_format", None)
+                response = await client.post(url, headers=headers, json=payload)
             if cls._needs_max_completion_tokens(response):
                 payload = dict(payload)
                 payload.pop("max_tokens", None)
                 payload["max_completion_tokens"] = max_tokens
                 response = await client.post(url, headers=headers, json=payload)
             response.raise_for_status()
-            return cls._openai_message_text(response.json())
+            data = response.json()
+            text = cls._openai_message_text(data)
+            # Thinking models expose their chain of thought in a separate field
+            # (`reasoning_content`). When the whole budget is consumed by that
+            # channel (finish_reason=length, content still empty) the answer
+            # never made it out — signal the caller to retry with more tokens.
+            choices = data.get("choices") if isinstance(data, dict) else None
+            finish_reason = ""
+            content_empty = True
+            if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+                finish_reason = str(choices[0].get("finish_reason") or "")
+                message = choices[0].get("message")
+                content = message.get("content") if isinstance(message, dict) else None
+                if isinstance(content, str) and content.strip():
+                    content_empty = False
+                elif isinstance(content, list) and any(
+                    isinstance(part, dict) and str(part.get("text") or "").strip()
+                    for part in content
+                ):
+                    content_empty = False
+            if finish_reason == "length" and content_empty:
+                raise _ThinkingBudgetExceeded(
+                    "completion budget exhausted inside the reasoning channel"
+                )
+            return text
 
     @classmethod
     async def _anthropic_reply(
@@ -218,6 +297,7 @@ class LLMService:
         *,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        json_schema: Optional[Dict[str, Any]] = None,
     ) -> str:
         """Request a raw completion from the configured provider.
 
@@ -249,16 +329,30 @@ class LLMService:
             model = str(runtime.get("model") or config.OPENAI_MODEL)
             fetch = cls._openai_compatible_reply
         try:
-            return await fetch(
-                user_text=user_text,
-                history=[],
-                base_url=base_url,
-                model=model,
-                api_key=api_key,
-                system_prompt=system_prompt,
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
+            kwargs: Dict[str, Any] = {
+                "user_text": user_text,
+                "history": [],
+                "base_url": base_url,
+                "model": model,
+                "api_key": api_key,
+                "system_prompt": system_prompt,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            }
+            # Structured output is an OpenAI-compatible extension; Anthropic's
+            # helper does not accept it.
+            if fetch is cls._openai_compatible_reply:
+                kwargs["json_schema"] = json_schema
+            try:
+                return await fetch(**kwargs)
+            except _ThinkingBudgetExceeded:
+                # A thinking model spent the whole budget on hidden reasoning
+                # before emitting the answer; retry once with a much larger
+                # budget so the thoughts can finish.
+                expanded = max(int(max_tokens) * 4, 8192)
+                print(f"[LLMService] thinking budget exhausted; retrying with max_tokens={expanded}")
+                kwargs["max_tokens"] = expanded
+                return await fetch(**kwargs)
         except Exception as exc:
             print(f"[LLMService] structured request failed: {type(exc).__name__}: {str(exc)[:240]}")
             return ""

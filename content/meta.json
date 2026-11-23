@@ -1,0 +1,27 @@
+{
+  "world_id": "wi_my_own_story",
+  "mounted_cartridges": ["chat", "manifold.web"],
+  "chip_status": {
+    "capacity": 5,
+    "heat": 0,
+    "coolEveryMs": 300000
+  },
+  "facts": {
+    "session.ready": {
+      "id": "session.ready",
+      "emittedAt": 1787014380337,
+      "actor": "system",
+      "source": "system.emitFact"
+    },
+    "boot.completed": {
+      "id": "boot.completed",
+      "emittedAt": 1787014435646,
+      "actor": "player",
+      "source": "client.emitFact"
+    }
+  },
+  "variables": {
+    "playerName": "访客",
+    "chapter": 1
+  }
+}

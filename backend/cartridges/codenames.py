@@ -311,6 +311,60 @@ class CodenamesCartridge(BaseCartridge):
             {"type": "game_outcome", "outcome": "win" if outcome == "team" else "loss", "reason": outcome},
         ]
 
+    @classmethod
+    def _unrevealed_cells(cls, game: Dict[str, Any]) -> List[int]:
+        """Indexes of cards still available to guess (public information)."""
+        return [
+            i
+            for i, cell in enumerate(game["cells"])
+            if cell["solvedBy"] is None and cell["assassinatedBy"] is None
+        ]
+
+    @staticmethod
+    def _clue_target_reached(turn: Optional[Dict[str, Any]]) -> bool:
+        """Whether the guesser flipped as many cards as the clue's count.
+
+        Only an integer count has a cap ("infinity" never auto-stops), and at
+        least one guess must have been made — ending a turn with zero guesses
+        is illegal in the public reducer.
+        """
+        if not isinstance(turn, dict) or not isinstance(turn.get("clue"), dict):
+            return False
+        count = turn["clue"].get("count")
+        if not isinstance(count, int) or isinstance(count, bool):
+            return False
+        guesses = turn.get("guesses")
+        return isinstance(guesses, list) and len(guesses) >= max(1, count)
+
+    @staticmethod
+    def _parse_action_json(raw: str) -> Optional[Dict[str, Any]]:
+        """Parse the model's single JSON action, tolerating fenced/prose output."""
+        # Some runtimes inline the thinking channel as <think>...</think>; drop
+        # it first so brace-rich reasoning text cannot hijack JSON extraction.
+        cleaned = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
+        try:
+            data = json.loads(cleaned)
+        except Exception:
+            match = re.search(r"\{.*\}", cleaned, re.DOTALL)
+            if not match:
+                return None
+            try:
+                data = json.loads(match.group(0))
+            except Exception:
+                return None
+        return data if isinstance(data, dict) else None
+
+    @classmethod
+    def _valid_guess_cell(cls, game: Dict[str, Any], cell: Any) -> bool:
+        """Public-information validity check for a guess target."""
+        return (
+            isinstance(cell, int)
+            and not isinstance(cell, bool)
+            and 0 <= cell < 25
+            and game["cells"][cell]["solvedBy"] is None
+            and game["cells"][cell]["assassinatedBy"] is None
+        )
+
     def reduce(self, actor: str, cmd: Dict[str, Any]) -> ReducerResult:
         command_type = cmd["type"]
         state = deepcopy(self.state)
@@ -440,36 +494,26 @@ class CodenamesCartridge(BaseCartridge):
             else:
                 turn = game["history"][-1]
                 if turn["clueGiver"] != agent_side:
-                    clue_count = turn["clue"].get("count") if isinstance(turn.get("clue"), dict) else None
-                    guessed = len(turn["guesses"])
-                    reached_target = isinstance(clue_count, int) and not isinstance(clue_count, bool)
-                    if reached_target and guessed >= clue_count and guessed >= 1:
+                    if self._clue_target_reached(turn):
                         return {"type": "endTurn"}
-                    candidates = [
-                        i
-                        for i, cell in enumerate(game["cells"])
-                        if cell["solvedBy"] is None and cell["assassinatedBy"] is None
-                    ]
+                    candidates = self._unrevealed_cells(game)
                     if candidates:
                         return {"type": "submitGuess", "cell": random.choice(candidates)}
         elif game["phase"] == SUDDEN_DEATH and self._remaining_agents(game, agent_side) > 0:
-            candidates = [
-                i
-                for i, cell in enumerate(game["cells"])
-                if cell["solvedBy"] is None and cell["assassinatedBy"] is None
-            ]
+            candidates = self._unrevealed_cells(game)
             if candidates:
                 return {"type": "submitGuess", "cell": random.choice(candidates)}
         return None
 
     async def generate_agent_turn(self) -> Optional[Dict[str, Any]]:
-        """Drive Nori's Codenames turn through the configured LLM.
+        """Ask the configured LLM for one Codenames action.
 
-        Serializes the current board, revealed cells and Nori's own key into a
-        prompt and asks the model for a single JSON action. Returns ``None`` on
-        any failure so World falls back to the deterministic rules. The model is
-        given only Nori's side of the key (spymaster knowledge) — the opponent's
-        key is never exposed, preserving the hidden-pattern game.
+        Two views are serialized: the Spymaster view (NORMAL phase, Nori's turn
+        to give a clue, no active turn yet) includes only Nori's own side of the
+        key; the Guesser view (NORMAL after the player's clue, or SUDDEN_DEATH)
+        exposes public information only — board words, revealed status and the
+        current clue. The opponent's key is never sent. Returns ``None`` on any
+        failure so World falls back to the deterministic non-cheating rules.
         """
         state = self.state
         game = state.get("gameState")
@@ -480,16 +524,23 @@ class CodenamesCartridge(BaseCartridge):
         cells = game["cells"]
 
         history = game.get("history") or []
-        current_giver = game["whoseTurnToGive"]
-        is_agent_giver = current_giver == agent_side
         active_turn = history[-1] if history and history[-1]["endedBy"] is None else None
+        # Spymaster mode exists only in NORMAL phase while awaiting Nori's clue.
+        # In SUDDEN_DEATH no clues are possible, so the LLM is always a guesser.
+        spymaster_mode = (
+            game["phase"] == NORMAL
+            and game["whoseTurnToGive"] == agent_side
+            and active_turn is None
+        )
+        if not spymaster_mode and game["phase"] == NORMAL and active_turn is None:
+            # Player still owes a clue; there is nothing for Nori to act on.
+            return None
+        if active_turn is not None and active_turn.get("clueGiver") == agent_side:
+            # Player is guessing Nori's clue; the reducer forbids the clue giver
+            # from guessing or ending the turn, so any action would be wasted.
+            return None
 
-        if is_agent_giver:
-            if active_turn is not None:
-                # The clue for this turn was already submitted; the guesser must
-                # act now. Without this guard the LLM would emit another clue
-                # every time World re-polls the agent.
-                return None
+        if spymaster_mode:
             # Spymaster view: Nori knows its own pattern and must craft a clue
             # word (NOT on the board) plus the number of agents it covers.
             board_lines = []
@@ -510,7 +561,8 @@ class CodenamesCartridge(BaseCartridge):
                 "appear on the board and should not be a compound or the board word "
                 "itself. Reply with only one JSON object, no commentary, no markdown: "
                 '{"action":"clue","word":"<one-word clue>","count":<1..9>,"cell":null}. '
-                "count = how many of your team's words the clue covers (<= number given)."
+                "count = how many of your team's words the clue covers (<= number given). "
+                "Write the clue in the same language as the board words."
             )
             user_prompt = (
                 "phase=NORMAL it is YOUR turn to give a clue.\n"
@@ -519,114 +571,120 @@ class CodenamesCartridge(BaseCartridge):
                 'Return a single JSON object of the form {"action":"clue",...} now.'
             )
         else:
-            # Guesser view: Nori must NOT see any key pattern. Reveal only the
-            # board words + whether each is already revealed, plus the Spymaster's
-            # clue for this turn, then pick the most semantically related hidden word.
+            # Guesser view: no key pattern for either team. Reveal only board
+            # words + revealed status, plus the active clue in NORMAL phase.
             board_lines = []
             for i, cell in enumerate(cells):
                 state_txt = "revealed" if (cell["solvedBy"] is not None or cell["assassinatedBy"] is not None) else "hidden"
                 board_lines.append(f"{i}: {board[i]['text']} [{state_txt}]")
-            clue_word = ""
-            clue_count = ""
-            turn = history[-1] if history else None
-            guessed_this_turn = 0
-            if turn and isinstance(turn.get("clue"), dict):
-                clue_word = str(turn["clue"].get("word") or "")
-                clue_count = str(turn["clue"].get("count") or "")
-                if isinstance(turn.get("guesses"), list):
-                    guessed_this_turn = len(turn["guesses"])
-            # A clue's count is the Spymaster's target; guessing "infinity" means
-            # keep going until you choose to stop.
             system_prompt = (
                 "You are Nori, the Guesser in Codenames. You do NOT know where any "
                 "team's agents or the assassin are — you only have the board words "
-                "and the Spymaster's clue. Choose the ONE hidden board word that is "
-                "most strongly related to the clue, then stop when you are done. "
-                "Reply with only one JSON object, no commentary:\n"
-                "To flip a card: {\"action\":\"guess\",\"cell\":<0-24>,"
-                "\"word\":null,\"count\":null} — choose an unrevealed cell, never "
+                "and, during NORMAL phase, the Spymaster's clue. Choose the ONE "
+                "hidden board word that is most strongly related to the clue, then "
+                "stop when you are done. Reply with only one JSON object, no "
+                "commentary:\n"
+                'To flip a card: {"action":"guess","cell":<0-24>,'
+                '"word":null,"count":null} — choose an unrevealed cell, never '
                 "invent a word.\n"
-                "To voluntarily END your turn (only after at least one guess): "
-                "{\"action\":\"end\",\"cell\":null,\"word\":null,\"count\":null}."
+                "To voluntarily END your turn (NORMAL phase only, after at least "
+                'one guess): {"action":"end","cell":null,"word":null,"count":null}.'
             )
-            user_prompt = (
-                "phase=NORMAL it is YOUR turn to guess.\n"
-                f"The clue is: \"{clue_word}\" (targets ~{clue_count} cards).\n"
-                f"You have already guessed {guessed_this_turn} card(s) this turn.\n"
-                "Guess one more board card you think fits, or end your turn if you "
-                "are done or uncertain.\n"
-                "Board:\n" + "\n".join(board_lines) + "\n"
-                'Return a single JSON object {"action":...} now.'
-            )
+            if game["phase"] == SUDDEN_DEATH:
+                user_prompt = (
+                    "phase=SUDDEN_DEATH: no clues remain for either side. Take your "
+                    "ONE final guess at the hidden board word most likely to belong "
+                    "to your team; you cannot end this turn.\n"
+                    "Board:\n" + "\n".join(board_lines) + "\n"
+                    'Return a single JSON object {"action":"guess","cell":<0-24>,...} now.'
+                )
+            else:
+                clue = active_turn.get("clue") if isinstance(active_turn, dict) else None
+                clue_word = str(clue.get("word") or "") if isinstance(clue, dict) else ""
+                clue_count = str(clue.get("count") or "") if isinstance(clue, dict) else ""
+                guessed_this_turn = len(active_turn.get("guesses") or []) if isinstance(active_turn, dict) else 0
+                user_prompt = (
+                    "phase=NORMAL it is YOUR turn to guess.\n"
+                    f'The clue is: "{clue_word}" (targets ~{clue_count} cards).\n'
+                    f"You have already guessed {guessed_this_turn} card(s) this turn.\n"
+                    "Guess one more board card you think fits, or end your turn if you "
+                    "are done or uncertain.\n"
+                    "Board:\n" + "\n".join(board_lines) + "\n"
+                    'Return a single JSON object {"action":...} now.'
+                )
 
-        raw = await LLM_SERVICE.generate_structured(system_prompt, user_prompt, temperature=0.4, max_tokens=160)
-        data: Any = None
-        for attempt in range(2):
+        # Thinking models burn many tokens before emitting the JSON answer, so
+        # the budget must be generous or `content` stays empty (finish=length).
+        # generate_structured retries with a 4x budget when that happens. The
+        # schema constrains output (and stops the hidden reasoning drain) where
+        # the provider supports it; JSON extraction still covers the rest.
+        # NOTE: every property needs a concrete type — LM Studio's grammar
+        # converter renders an empty `{}` property as a literal `{}` value,
+        # which used to turn every guess cell into `{}` and silently push the
+        # agent onto the fallback rules. Optional fields are simply omitted.
+        action_schema: Dict[str, Any] = {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["clue", "guess", "end"]},
+                "word": {"type": "string"},
+                "count": {"type": "integer"},
+                "cell": {"type": "integer"},
+            },
+            "required": ["action"],
+        }
+        raw = await LLM_SERVICE.generate_structured(
+            system_prompt, user_prompt, temperature=0.4, max_tokens=4096, json_schema=action_schema
+        )
+        data = self._parse_action_json(raw) if raw else None
+        if data is None and raw:
+            # One retry with the same prompt before falling back to rules.
+            print("[nori-codenames] LLM action unparseable; retrying once")
+            raw = await LLM_SERVICE.generate_structured(
+                system_prompt, user_prompt, temperature=0.4, max_tokens=4096, json_schema=action_schema
+            )
+            data = self._parse_action_json(raw) if raw else None
+        if data is None:
             if not raw:
-                return None
-            try:
-                data = json.loads(raw)
-            except Exception:
-                match = re.search(r"\{.*\}", raw, re.DOTALL)
-                if not match:
-                    data = None
-                else:
-                    try:
-                        data = json.loads(match.group(0))
-                    except Exception:
-                        data = None
-            if isinstance(data, dict):
-                break
-            if attempt == 0:
-                # One retry with the same prompt before falling back to rules.
-                print("[nori-codenames] LLM returned unparseable action; retrying once")
-                raw = await LLM_SERVICE.generate_structured(system_prompt, user_prompt, temperature=0.4, max_tokens=160)
-        if not isinstance(data, dict):
+                print("[nori-codenames] no LLM response; using non-cheating fallback")
+            else:
+                print("[nori-codenames] LLM action unparseable after retry; using fallback")
             return None
 
         action = str(data.get("action") or "")
         if game["phase"] != NORMAL:
+            # SUDDEN_DEATH: exactly one guess, no clues, no voluntary ending.
             if action != "guess":
+                print(f"[nori-codenames] ignoring non-guess action {action!r} in {game['phase']}")
                 return None
             cell = data.get("cell")
-            if not isinstance(cell, int) or not (0 <= cell < 25):
-                return None
-            if cells[cell]["solvedBy"] is not None or cells[cell]["assassinatedBy"] is not None:
+            if not self._valid_guess_cell(game, cell):
+                print("[nori-codenames] LLM returned invalid guess cell; using fallback")
                 return None
             return {"type": "submitGuess", "cell": cell}
 
-        # NORMAL phase: decide clue vs guess based on whose turn.
-        if current_giver == agent_side and action != "guess":
+        # NORMAL phase: clue when Spymaster, guess/end when Guesser.
+        if spymaster_mode and action != "guess":
             word = str(data.get("word") or "").strip().upper()
             count = data.get("count")
             if not word or len(word) > 24 or re.search(r"\s|\d", word):
+                print("[nori-codenames] LLM returned invalid clue word; using fallback")
                 return None
             if word in {entry["text"].upper() for entry in board}:
+                print("[nori-codenames] LLM clue matches a board word; using fallback")
                 return None
             if count != "infinity" and (isinstance(count, bool) or not isinstance(count, int) or count < 0):
                 count = 1
             return {"type": "submitClue", "clue": {"word": word, "count": count if isinstance(count, int) else 1}}
-        else:
-            turn = game["history"][-1] if game["history"] else None
-            if not turn or turn["endedBy"] is not None:
-                return None
-            guesses = turn.get("guesses") if isinstance(turn, dict) else None
-            guessed_count = len(guesses) if isinstance(guesses, list) else 0
-            clue_count_raw = turn["clue"].get("count") if isinstance(turn.get("clue"), dict) else None
-            # End the turn deterministically once we've flipped the Spymaster's
-            # target number of cards (the clue's count). "infinity" has no cap, so
-            # the LLM explicitly stops instead.
-            reached_target = isinstance(clue_count_raw, int) and not isinstance(clue_count_raw, bool)
-            reached_target = reached_target and guessed_count >= clue_count_raw
-            # Deterministically end the turn once we've reached the target count,
-            # or when the LLM explicitly asks to stop (after >=1 guess).
-            if action == "end" or reached_target:
-                if guessed_count >= 1:
-                    return {"type": "endTurn"}
-                return None
-            cell = data.get("cell")
-            if not isinstance(cell, int) or not (0 <= cell < 25):
-                return None
-            if cells[cell]["solvedBy"] is not None or cells[cell]["assassinatedBy"] is not None:
-                return None
-            return {"type": "submitGuess", "cell": cell}
+
+        guessed_count = len(active_turn.get("guesses") or []) if isinstance(active_turn, dict) else 0
+        # End when the LLM stops, or deterministically once the clue target is
+        # reached. "infinity" has no cap, so the LLM explicitly stops instead.
+        if action == "end" or self._clue_target_reached(active_turn):
+            if guessed_count >= 1:
+                return {"type": "endTurn"}
+            print("[nori-codenames] cannot end before any guess; requesting one more")
+        cell = data.get("cell")
+        if not self._valid_guess_cell(game, cell):
+            print("[nori-codenames] LLM returned invalid guess cell; using fallback")
+            return None
+        return {"type": "submitGuess", "cell": cell}

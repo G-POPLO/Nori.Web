@@ -2382,7 +2382,7 @@ const Vt = r.memo(function () {
         (Y("boardgames-codenames-clue-given"), R({ clue: S.clue, label: O }));
         const M = setTimeout(() => R(null), J.CLUE_HIGHLIGHT_DURATION);
         return () => clearTimeout(M);
-      }, [d, d?.history.length, N, a]),
+      }, [d?.history.length, N, a]),
       r.useEffect(() => {
         b(null);
       }, [b]));

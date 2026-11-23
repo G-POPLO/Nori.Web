@@ -27,6 +27,10 @@
     <!-- Dedicated URL-scoped wallpaper mode also runs before the historical app
          so the desktop chrome is suppressed before its first rendered frame. -->
     <script src="/nori-wallpaper-mode.js"></script>
+    <!-- Re-enforces the Codenames clue-reveal auto-dismiss from the outside:
+         the historical GameScreen bundle can strand that overlay when a state
+         broadcast lands inside its 3s highlight window. -->
+    <script src="/nori-codenames-overlay-watchdog.js"></script>
     <!-- Keep the compatibility panels visually consistent with the native
          Settings pages by letting the Nori window glass show through. -->
     <link rel="stylesheet" href="/nori-settings-glass.css" />

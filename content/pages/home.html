@@ -1,0 +1,26 @@
+<!--
+{"id": "browser.myhome", "url": "https://localhost/home/", "title": "起点", "read_fact": "myhome.read", "aliases": ["https://localhost/home/index.html"]}
+-->
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>起点</title>
+<style>
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center;
+         background: #0b1020; color: #dbe4ff; font-family: system-ui, sans-serif; }
+  main { max-width: 640px; padding: 40px; }
+  h1 { font-weight: 500; font-size: 28px; }
+  code { background: #1b2440; padding: 2px 6px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>这是你自己的网页</h1>
+  <p>整个 HTML 文件就是 <code>body_html</code>。你可以写任意 HTML / CSS / 内联脚本。</p>
+  <p>元数据写在最上方的 HTML 注释里，声明这个页面的 URL、标题和访问后要发射的 fact。</p>
+  <p>改完重新编译，游戏内浏览器就能打开它。</p>
+</main>
+</body>
+</html>
