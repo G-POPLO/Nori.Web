@@ -299,9 +299,19 @@ class EventDispatcher:
         now = int(time.time() * 1000)
 
         if channel == "manifold.chip.status":
+            # The shipped client validates `manifold.chip.status.result` with a
+            # strict Zod schema that only knows capacity/heat/coolEveryMs/
+            # serverNowMs. `scanCount` is a backend-only field emitted on other
+            # chip events; including it here trips `unrecognized_keys` and the
+            # client drops the whole response. Strip it for this RPC reply only.
+            status = self._chip_status()
+            client_status = {
+                key: value for key, value in status.items()
+                if key != "scanCount"
+            }
             return self.build_response(
                 "manifold.chip.status.result",
-                self._chip_status(),
+                client_status,
                 cartridge_id=cartridge_id,
                 request_id=request_id,
             )
