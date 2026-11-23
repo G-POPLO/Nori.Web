@@ -10,6 +10,7 @@
     "start": "python server.py",
     "start:py": "python server.py",
     "frontend:build": "vite build --config frontend-src/vite.config.ts",
+    "build:source-app": "vite build --config frontend-src/source-app.vite.config.ts && node scripts/build_source_app.mjs public/source-app",
     "frontend:app:dev": "vite --config frontend-src/app.vite.config.ts",
     "frontend:app:build": "vite build --config frontend-src/app.vite.config.ts",
     "frontend:cutover:check": "node scripts/verify_frontend_cutover.mjs",
