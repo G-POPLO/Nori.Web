@@ -21,6 +21,12 @@ Front matter is a JSON object inside the first HTML comment:
 For pages, the HTML file itself IS the body_html; front matter only supplies
 url/title/id/aliases/read_fact/allowed_commands.
 
+Gated files (front matter with `recover_when` or `threshold`) get their body
+split out to `public/gated/<key>.json`; the pack keeps only metadata plus a
+`contentKey`. The browser-side `nori-file-gate.js` injects the body back only
+after the matching fact or compute threshold is reached. This is a
+presentation-layer lock — the gated bodies are still served as static files.
+
 Run:
 
     python tools/compose_pack.py            # build -> backend/data/live_world_pack.json
@@ -42,8 +48,19 @@ ROOT = Path(__file__).resolve().parent.parent
 CONTENT = ROOT / "content"
 DEFAULT_PACK = ROOT / "backend" / "data" / "live_world_pack.json"
 PUBLIC_ASSETS = ROOT / "public" / "webAssets"
+GATED_DIR = ROOT / "public" / "gated"
 
 FRONT_MATTER_RE = re.compile(r"^\s*<!--\s*(\{.*?\})\s*-->\s*\n?", re.S)
+
+# Module-level accumulators reset on every build. Gated bodies are written to
+# public/gated/ next to the pack; the manifest tells the browser gate which
+# fact / compute threshold unlocks each body and how to fetch it.
+_GATED_BODIES: dict[str, str] = {}
+_GATED_MANIFEST: dict[str, Any] = {}
+
+
+def safe_gate_key(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("._") or "gated"
 
 
 def warn(msg: str) -> None:
@@ -108,16 +125,39 @@ def build_files() -> list[dict[str, Any]]:
         display_path = meta.get("display_path", rel)
         folder = meta.get("folder") or (display_path.split("/")[0] if "/" in display_path else "")
         item_id = meta.get("id", f"file.{path.stem}")
+        data: dict[str, Any] = {
+            "display_path": display_path,
+            "mime": meta.get("mime", "text/plain"),
+            "folder": folder,
+            "modified_at": meta.get("modified_at", time.strftime("%Y-%m-%dT%H:%M:%S")),
+        }
+
+        # A file is gated when the author declares either a recovery fact or a
+        # compute threshold. Its body is removed from the pack and served from
+        # public/gated/ only after the browser gate unlocks it.
+        gate_fact = meta.get("recover_when") if isinstance(meta.get("recover_when"), str) else ""
+        gate_threshold = meta.get("threshold") if isinstance(meta.get("threshold"), (int, float)) else None
+        if gate_fact or gate_threshold is not None:
+            key = safe_gate_key(meta.get("gate_key") or item_id)
+            _GATED_BODIES[key] = body
+            _GATED_MANIFEST[key] = {
+                "bodyUrl": f"/gated/{key}.json",
+                "recoverWhen": gate_fact,
+                "threshold": gate_threshold,
+            }
+            data["contentKey"] = key
+            data["cipher"] = meta.get("cipher", "GATED")
+            if gate_fact:
+                data["recover_when"] = gate_fact
+            if gate_threshold is not None:
+                data["threshold"] = gate_threshold
+        else:
+            data["body_md"] = body
+
         out.append({
             "id": item_id,
             "type": "file",
-            "data": {
-                "display_path": display_path,
-                "mime": meta.get("mime", "text/plain"),
-                "folder": folder,
-                "modified_at": meta.get("modified_at", time.strftime("%Y-%m-%dT%H:%M:%S")),
-                "body_md": body,
-            },
+            "data": data,
             "surfacedAt": meta.get("surfacedAt", now_ms()),
         })
     return out
@@ -220,6 +260,9 @@ def copy_assets() -> int:
 
 
 def build_pack() -> dict[str, Any]:
+    global _GATED_BODIES, _GATED_MANIFEST
+    _GATED_BODIES = {}
+    _GATED_MANIFEST = {}
     meta = load_meta()
     threads, messages = build_signal()
     pack = {
@@ -273,6 +316,20 @@ def main() -> int:
     )
     size_mb = args.out.stat().st_size / 1024 / 1024
     print(f"pack written: {args.out} ({size_mb:.3f} MB)")
+
+    # Gated bodies + manifest: static assets the browser gate fetches on unlock.
+    if _GATED_MANIFEST:
+        GATED_DIR.mkdir(parents=True, exist_ok=True)
+        for key, body in _GATED_BODIES.items():
+            (GATED_DIR / f"{key}.json").write_text(
+                json.dumps({"body_md": body}, ensure_ascii=False), encoding="utf-8"
+            )
+        (GATED_DIR / "manifest.json").write_text(
+            json.dumps({"version": 1, "files": _GATED_MANIFEST}, ensure_ascii=False, indent=1),
+            encoding="utf-8",
+        )
+        print(f"gated bodies written: {len(_GATED_BODIES)} -> {GATED_DIR}")
+
     copied = copy_assets()
     if copied:
         print(f"assets copied to {PUBLIC_ASSETS}: {copied}")

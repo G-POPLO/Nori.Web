@@ -1,0 +1,10 @@
+{
+ "version": 1,
+ "files": {
+  "file_secret_log": {
+   "bodyUrl": "/gated/file_secret_log.json",
+   "recoverWhen": "recover.secret_log",
+   "threshold": null
+  }
+ }
+}

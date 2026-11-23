@@ -1,7 +1,7 @@
 {
  "_meta": {
   "source": "locally composed content (tools/compose_pack.py)",
-  "imported_at": "2026-11-20T13:29:32",
+  "imported_at": "2026-11-23T18:05:02",
   "world_id": "wi_my_own_story"
  },
  "mail_artifacts": [
@@ -9,7 +9,7 @@
    "id": "mail.welcome",
    "type": "mail",
    "data": {
-    "read_fact": "mail.welcome.read",
+    "read_fact": "recover.secret_log",
     "subject": "欢迎来到这里",
     "from": "档案管理员 <archivist@localhost>",
     "body_md": "你好，\n\n这是一封由 `content/mail/` 下的 Markdown 文件生成的示例邮件。\n\n你可以随意修改这段文字，重新运行编译器后，游戏里的邮件内容就会跟着变化。\n\n— 档案管理员\n"
@@ -18,6 +18,20 @@
   }
  ],
  "file_artifacts": [
+  {
+   "id": "file.secret_log",
+   "type": "file",
+   "data": {
+    "display_path": "文稿/机密记录.txt",
+    "mime": "text/plain",
+    "folder": "文稿",
+    "modified_at": "2026-08-20T12:00:00",
+    "contentKey": "file_secret_log",
+    "cipher": "RSA-2048",
+    "recover_when": "recover.secret_log"
+   },
+   "surfacedAt": 1795428302697
+  },
   {
    "id": "file.readme",
    "type": "file",
@@ -48,7 +62,7 @@
     "reread": {},
     "service": true
    },
-   "surfacedAt": 1795152572406
+   "surfacedAt": 1795428302696
   }
  ],
  "signal_message_artifacts": [
@@ -63,7 +77,7 @@
     "timestamp": "2026-08-10T09:12:00",
     "body_md": "你终于上线了。我留了一份档案给你。\n"
    },
-   "surfacedAt": 1795152572406
+   "surfacedAt": 1795428302696
   },
   {
    "id": "signal.mira.m02",
@@ -76,7 +90,7 @@
     "timestamp": "2026-08-10T09:14:00",
     "body_md": "收到。先从我这里开始看起吗？\n"
    },
-   "surfacedAt": 1795152572406
+   "surfacedAt": 1795428302696
   },
   {
    "id": "signal.mira.m03",
@@ -89,7 +103,7 @@
     "timestamp": "2026-08-10T09:15:00",
     "body_md": "对。读完之后，去浏览器里找 `https://localhost/home/`。\n"
    },
-   "surfacedAt": 1795152572406
+   "surfacedAt": 1795428302696
   }
  ],
  "browser_pages": [
